@@ -200,6 +200,9 @@ class _SegmentedTabControlState extends State<_SegmentedTabControl>
   void dispose() {
     _internalAnimationController.removeListener(_handleInternalAnimationTick);
     _internalAnimationController.dispose();
+    if (_controllerIsValid) {
+      _controller!.animation!.removeListener(_handleTabControllerAnimationTick);
+    }
     super.dispose();
   }
 
@@ -264,6 +267,9 @@ class _SegmentedTabControlState extends State<_SegmentedTabControl>
   }
 
   void _handleTabControllerAnimationTick() {
+    if (!mounted) {
+      return;
+    }
     final currentValue = _controller!.animation!.value;
     _animateIndicatorTo(_animationValueToAlignment(currentValue));
   }
