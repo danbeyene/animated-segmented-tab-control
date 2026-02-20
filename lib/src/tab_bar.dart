@@ -117,7 +117,6 @@ class SegmentedTabControl extends StatelessWidget {
 
 class _SegmentedTabControl extends StatefulWidget implements PreferredSizeWidget {
   const _SegmentedTabControl({
-    super.key,
     required this.height,
     required this.tabs,
     required this.maxWidth,
@@ -163,9 +162,9 @@ class _SegmentedTabControl extends StatefulWidget implements PreferredSizeWidget
 class _SegmentedTabControlState extends State<_SegmentedTabControl>
     with SingleTickerProviderStateMixin {
   EdgeInsets _currentTilePadding = EdgeInsets.zero;
-  Alignment _currentIndicatorAlignment = Alignment.centerLeft;
+  AlignmentDirectional _currentIndicatorAlignment = const AlignmentDirectional(-1, 0);
   late AnimationController _internalAnimationController;
-  late Animation<Alignment> _internalAnimation;
+  late Animation<AlignmentDirectional> _internalAnimation;
   TabController? _controller;
 
   int _totalFlex = 0;
@@ -300,9 +299,9 @@ class _SegmentedTabControlState extends State<_SegmentedTabControl>
     alignmentXRanges.add(DoubleRange(alignmentStartX, computedWidth));
   }
 
-  Alignment _animationValueToAlignment(double? value) {
+  AlignmentDirectional _animationValueToAlignment(double? value) {
     if (value == null) {
-      return const Alignment(-1, 0);
+      return const AlignmentDirectional(-1, 0);
     }
 
     final index = value.round();
@@ -325,19 +324,25 @@ class _SegmentedTabControlState extends State<_SegmentedTabControl>
     return target;
   }
 
-  Alignment _calculateAlignmentFromTarget(double position, int index) {
+  AlignmentDirectional _calculateAlignmentFromTarget(double position, int index) {
+    if (_maxWidth == 0 || _totalFlex == 0) return const AlignmentDirectional(0, 0);
+
     final tabWidth = (widget.tabs[index].flex / _totalFlex) * _maxWidth;
     final currentTabHalfWidth = tabWidth / 2;
     final halfMaxWidth = _maxWidth / 2;
 
-    final x =
-        (position - halfMaxWidth + currentTabHalfWidth) / (halfMaxWidth - currentTabHalfWidth);
+    if (halfMaxWidth == currentTabHalfWidth) return const AlignmentDirectional(0, 0);
 
-    return Alignment(x, 0);
+    final x = (position - halfMaxWidth + currentTabHalfWidth) /
+        (halfMaxWidth - currentTabHalfWidth);
+
+    if (x.isNaN || x.isInfinite) return const AlignmentDirectional(0, 0);
+
+    return AlignmentDirectional(x, 0);
   }
 
-  TickerFuture _animateIndicatorTo(Alignment target) {
-    _internalAnimation = _internalAnimationController.drive(AlignmentTween(
+  TickerFuture _animateIndicatorTo(AlignmentDirectional target) {
+    _internalAnimation = _internalAnimationController.drive(Tween<AlignmentDirectional>(
       begin: _currentIndicatorAlignment,
       end: target,
     ));
@@ -357,14 +362,18 @@ class _SegmentedTabControlState extends State<_SegmentedTabControl>
         currentTab.selectedTextColor ?? widget.selectedTabTextColor ?? Colors.white;
 
     final tabTextColor =
-        currentTab.textColor ?? widget.tabTextColor ?? Colors.white.withOpacity(0.7);
+        currentTab.textColor ?? widget.tabTextColor ?? Colors.white.withValues(alpha: 0.7);
 
     return DefaultTextStyle(
       style: widget.textStyle ?? DefaultTextStyle.of(context).style,
       child: LayoutBuilder(
         builder: (context, _) {
-          final indicatorWidth = ((_maxWidth - widget.indicatorPadding.horizontal) / _totalFlex) *
+          final rawIndicatorWidth = ((_maxWidth - widget.indicatorPadding.horizontal) / _totalFlex) *
               widget.tabs[_internalIndex].flex;
+
+          final indicatorWidth = rawIndicatorWidth.isNaN || rawIndicatorWidth.isInfinite || rawIndicatorWidth < 0
+              ? 0.0
+              : rawIndicatorWidth;
 
           return ClipRRect(
             borderRadius: widget.barDecoration?.borderRadius ?? BorderRadius.zero,
@@ -429,14 +438,16 @@ class _SegmentedTabControlState extends State<_SegmentedTabControl>
                     builder: (squeezePadding) => ClipPath(
                       clipper: RRectRevealClipper(
                         size: Size(
-                          indicatorWidth,
-                          widget.height -
-                              widget.indicatorPadding.vertical -
-                              squeezePadding.vertical,
+                          indicatorWidth.isNaN ? 0.0 : indicatorWidth,
+                          (widget.height -
+                                  widget.indicatorPadding.vertical -
+                                  squeezePadding.vertical)
+                              .clamp(0.0, double.infinity),
                         ),
                         offset: Offset(
-                          _xToPercentsCoefficient(_currentIndicatorAlignment) *
-                              (_maxWidth - indicatorWidth),
+                          (_xToPhysicalPercentsCoefficient(_currentIndicatorAlignment) *
+                                      (_maxWidth - (indicatorWidth.isNaN ? 0.0 : indicatorWidth)))
+                                  .clamp(0.0, double.infinity),
                           0,
                         ),
                       ),
@@ -494,21 +505,23 @@ class _SegmentedTabControlState extends State<_SegmentedTabControl>
       return null;
     }
     return (details) {
-      double x = _currentIndicatorAlignment.x + details.delta.dx / (maxWidth / widget.tabs.length);
+      final isRtl = Directionality.of(context) == TextDirection.rtl;
+      final deltaX = isRtl ? -details.delta.dx : details.delta.dx;
+      double x = _currentIndicatorAlignment.start + deltaX / (maxWidth / widget.tabs.length);
       if (x < -1) {
         x = -1;
       } else if (x > 1) {
         x = 1;
       }
       setState(() {
-        _currentIndicatorAlignment = Alignment(x, 0);
+        _currentIndicatorAlignment = AlignmentDirectional(x, 0);
         _internalIndex = _alignmentToIndex(_currentIndicatorAlignment);
       });
     };
   }
 
-  int _alignmentToIndex(Alignment alignment) {
-    final currentPosition = _xToPercentsCoefficient(alignment);
+  int _alignmentToIndex(AlignmentDirectional alignment) {
+    final currentPosition = _xToLogicalPercentsCoefficient(alignment);
     final roundedCurrentPosition = num.parse(currentPosition.toStringAsFixed(2));
 
     final index = flexFactors.indexWhere((flexFactor) => roundedCurrentPosition <= flexFactor);
@@ -516,9 +529,17 @@ class _SegmentedTabControlState extends State<_SegmentedTabControl>
     return index == -1 ? _controller!.length - 1 : index;
   }
 
-  /// Converts [Alignment.x] value in range -1..1 to 0..1 percents coefficient
-  double _xToPercentsCoefficient(Alignment alignment) {
-    return (alignment.x + 1) / 2;
+  /// Converts [AlignmentDirectional.start] value in range -1..1 to 0..1 percents coefficient
+  double _xToLogicalPercentsCoefficient(AlignmentDirectional alignment) {
+    return (alignment.start + 1) / 2;
+  }
+
+  double _xToPhysicalPercentsCoefficient(AlignmentDirectional? alignment) {
+    if (alignment == null) return 0.0;
+    final isRtl = Directionality.of(context) == TextDirection.rtl;
+    final x = isRtl ? -alignment.start : alignment.start;
+    final val = (x + 1) / 2;
+    return val.isNaN || val.isInfinite ? 0.0 : val;
   }
 
   GestureDragEndCallback _onPanEnd(double maxWidth) {
@@ -537,11 +558,12 @@ class _SegmentedTabControlState extends State<_SegmentedTabControl>
   TickerFuture _animateIndicatorToNearest(Offset pixelsPerSecond, double width) {
     final nearest = _internalIndex;
     final target = _animationValueToAlignment(nearest.toDouble());
-    _internalAnimation = _internalAnimationController.drive(AlignmentTween(
+    _internalAnimation = _internalAnimationController.drive(Tween<AlignmentDirectional>(
       begin: _currentIndicatorAlignment,
       end: target,
     ));
-    final unitsPerSecondX = pixelsPerSecond.dx / width;
+    final isRtl = Directionality.of(context) == TextDirection.rtl;
+    final unitsPerSecondX = (isRtl ? -pixelsPerSecond.dx : pixelsPerSecond.dx) / width;
     final unitsPerSecond = Offset(unitsPerSecondX, 0);
     final unitVelocity = unitsPerSecond.distance;
 

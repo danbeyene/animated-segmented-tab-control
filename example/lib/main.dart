@@ -13,6 +13,10 @@ class MyApp extends StatelessWidget {
     final textStyle = Theme.of(context).textTheme.bodyLarge;
     final selectedTextStyle = textStyle?.copyWith(fontWeight: FontWeight.bold);
     return MaterialApp(
+      builder: (context, child) => Directionality(
+        textDirection: TextDirection.rtl,
+        child: child!,
+      ),
       // Provides the [TabController]
       home: DefaultTabController(
         length: 3,
